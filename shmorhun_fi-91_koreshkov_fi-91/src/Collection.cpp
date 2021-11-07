@@ -1,9 +1,13 @@
 ﻿#include "Collection.h"
 #include <stack>
 
-Node* Collection::Insert(const Set& new_set) {
-    if (!root) return root = new Node(nullptr, new_set);
-    return root->Insert(new_set);
+void Collection::Insert(const Set& new_set) {
+    if (!root) {
+        root = new Node(nullptr, new_set);
+    }
+    else {
+        root->Insert(new_set);
+    }
 }
 
 
@@ -11,7 +15,10 @@ void Collection::PrintSubtree(std::ostream& os, Node* subtree_root, std::string 
     if (subtree_root == nullptr) {
         return;
     }
-    os << prefix << subtree_root->set << std::endl;
+    os << prefix << subtree_root->set;
+    if (subtree_root->is_real) os << "*";
+    if (subtree_root->subnodes[0] == nullptr && subtree_root->subnodes[1] == nullptr) os << "]";
+    os << std::endl;
 
     PrintSubtree(os, subtree_root->subnodes[0], children_prefix + "L-- ", children_prefix + "|   ");
     PrintSubtree(os, subtree_root->subnodes[1], children_prefix + "L-- ", children_prefix + "    ");
@@ -34,35 +41,28 @@ void Node::ExpandTo(const Set& to_set) {
     set = set.Union(to_set);
 }
 
-Node* Node::Insert(const Set& new_set) {
-    if (new_set == set) {
-        is_real = true;
-        return this;
-    }
+/*
+* TODO: Fix. Now partial order is broken. Need to expand subroots and propagate changes down the tree.
+*/
+void Node::Insert(const Set& new_set) {
 
+
+    // Step -1: check if leaf already exists
+    if (new_set == set && IsLeaf()) {
+        return;
+    }
     Set orig_set = set;
-    ExpandTo(new_set);
-    if (!is_real || orig_set.Size() == set.Size()) {
-        // No expansion and/or no need to save orig_set
-    }
-    else {
-        is_real = false;
-        InsertSubset(orig_set);
-    }
-    return InsertSubset(new_set);
-}
 
-Node* Node::InsertSubset(const Set& new_set) {   
-    // Step 0: check if Node is empty.
+    // Step 0: check if Node has no children.
 
     if (subnodes[0] == nullptr) {
         // No subnodes at all. Just add the first subnode.
         subnodes[0] = new Node(this, new_set);
-        return subnodes[0];
+        return;
     }
 
     // Step 1: find MIN{new_set \ subnode[i]}
-    //    It will show, how much do we need to expand a node to fit the set in it
+    //    It will show, how much do we need to expand a node to fit the new_set in it
 
     short argmin_i;
     Set complements[2] = {
@@ -74,33 +74,56 @@ Node* Node::InsertSubset(const Set& new_set) {
         complements[1].Size()
     };
 
-    // Step 2: Subset test
-    //     because (|X\A| = 0) => (X is a subset of A)
-
-    if (complement_sizes[0] == 0) {
-        if (subnodes[1] == nullptr) {
-            // just insert as new subnode
-            subnodes[1] = new Node(this, new_set);
-            return subnodes[1];
-        }
-        return subnodes[0]->Insert(new_set);
-    }
-    if (subnodes[1] == nullptr) {
-        // just insert as new subnode
-        subnodes[1] = new Node(this, new_set);
-        return subnodes[1];
-    }
-    if (complement_sizes[1] == 0) {
-        // set <= subnode[1]
-        return subnodes[1]->Insert(new_set);
-    }
-
-    // Step 3: Superset test
-
     unsigned int subset_nodes = subset_test(new_set);
 
+    // Step 2: Subset test (check if new_set <= A)
+    //     because (|X\A| = 0) => (X is a subset of A)
+
+    // Note: There can be a situation when new_set <= subnodes[0] AND new_set <= subnodes[1].
+    //   In such case just choose left subtree. 
+    //   It is ok because subset test always starts from the subnode[0].
+
+    // Firstly: if new_set is not a subset nor superset of subnodes[0], just insert it as a subnode[1]
+
+
+    if (complement_sizes[0] == 0) {
+        // new_set <= subnodes[0]
+        // Insert in 0th subtree.
+        subnodes[0]->Insert(new_set);
+        return;
+    } 
+
+    if (subset_nodes == 1) {
+        // subnode[0] <= new_set
+        // Insert as new root of the 0th subtree
+
+        Node* new_node = new Node(this, new_set);
+        new_node->subnodes[0] = subnodes[0];
+        subnodes[0]->parent = new_node;
+        subnodes[0] = new_node;
+        return;
+    }
+
+    // Now new_set is not a subset nor superset of subnodes[0]
+
+    if (subnodes[1] == nullptr) {
+        // just insert as a new second subnode.
+        subnodes[1] = new Node(this, new_set);
+        return;
+    }
+
+    // Now subnodes[1] != nullptr !
+
+    // Other checks:
+
+    if (complement_sizes[1] == 0) {
+        // new_set <= subnode[1]
+        subnodes[1]->Insert(new_set);
+        return;
+    }
+    
     if (subset_nodes == 3) {
-        // subnode[0], subnode[1] <= set
+        // subnode[0], subnode[1] both are subsets of new_set
 
         /*  
         FROM
@@ -118,7 +141,7 @@ Node* Node::InsertSubset(const Set& new_set) {
             +-- new_node(new_set) 
                 +-- node[1]
                 +-- node[2]  
-            +-- 
+            
         +-- other
         */
         
@@ -129,18 +152,7 @@ Node* Node::InsertSubset(const Set& new_set) {
         subnodes[1]->parent = new_node;
         subnodes[0] = new_node;
         subnodes[1] = nullptr;
-        return new_node;
-    }
-
-    if (subset_nodes == 1) {
-        // subnode[0] <= set
-        // same as in previous `if`, but only for subnode[0]
-
-        Node* new_node = new Node(this, new_set);
-        new_node->subnodes[0] = subnodes[0];
-        subnodes[0]->parent = new_node;
-        subnodes[0] = new_node;
-        return new_node;
+        return;
     }
 
     if (subset_nodes == 2) {
@@ -151,7 +163,7 @@ Node* Node::InsertSubset(const Set& new_set) {
         new_node->subnodes[1] = subnodes[1];
         subnodes[1]->parent = new_node;
         subnodes[1] = new_node;
-        return new_node;
+        return;
     }
 
     // Step 4: (otherwise) General insert
@@ -162,7 +174,7 @@ Node* Node::InsertSubset(const Set& new_set) {
         argmin_i = 1;
     }
 
-    return subnodes[argmin_i]->Insert(new_set);
+    subnodes[argmin_i]->Insert(new_set);
 }
 
 
